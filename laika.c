@@ -674,6 +674,63 @@ lval* builtin_neg(lenv* e, lval* a) {
     return lval_bool(a_negated);
 }
 
+lval* builtin_is_empty(lenv* e, lval* a) {
+    LASSERT_NUM("is-empty", a, 1);
+    LASSERT_TYPE("is-empty", a, 0, LVAL_QEXPR);
+    int is_empty = 0;
+    if (a->cell[0]->count == 0) {
+        is_empty = 1;
+    }
+    lval_del(a);
+    return lval_bool(is_empty);
+}
+
+lval* builtin_get_nth(lenv* e, lval* a) {
+    LASSERT_NUM("nth", a, 2);
+    LASSERT_TYPE("nth", a, 0, LVAL_NUM);
+    LASSERT_TYPE("nth", a, 1, LVAL_QEXPR);
+    int i = a->cell[0]->num;
+    if (i < 1) {
+        return lval_err("Index can not be lower than 1, got %li", i);
+    }
+    lval* target = a->cell[1];
+    if (target->count < i) {
+        return lval_err("Tried to access element %li but list has only %li elements", i, target->count);
+    }
+    lval* result = lval_copy(target->cell[i-1]);
+    lval_del(a);
+    return result;
+}
+lval* builtin_get_len(lenv* e, lval* a) {
+    LASSERT_NUM("len", a, 1);
+    LASSERT_TYPE("len", a, 0, LVAL_QEXPR);
+    int len = a->cell[0]->count;
+    lval_del(a);
+    return lval_num(len);
+}
+
+lval* builtin_or(lenv* e, lval* a) {
+    LASSERT_NUM("or", a, 2);
+    LASSERT_TYPE("or", a, 0, LVAL_BOOL);
+    LASSERT_TYPE("or", a, 1, LVAL_BOOL);
+    long x1 = a->cell[0]->num;
+    long x2 = a->cell[1]->num;
+    int r = x1 || x2;
+    lval_del(a);
+    return lval_bool(r);
+}
+lval* builtin_and(lenv* e, lval* a) {
+    LASSERT_NUM("or", a, 2);
+    LASSERT_TYPE("or", a, 0, LVAL_BOOL);
+    LASSERT_TYPE("or", a, 1, LVAL_BOOL);
+    long x1 = a->cell[0]->num;
+    long x2 = a->cell[1]->num;
+    int r = x1 && x2;
+    lval_del(a);
+    return lval_bool(r);
+}
+
+
 void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
     lval* k = lval_sym(name);
     lval* v = lval_fun(func);
@@ -703,6 +760,11 @@ void lenv_add_builtins(lenv* e) {
     lenv_add_builtin(e, "=", builtin_eq);
     lenv_add_builtin(e, "!=", builtin_neq);
     lenv_add_builtin(e, "!", builtin_neg);
+    lenv_add_builtin(e, "is-empty", builtin_is_empty);
+    lenv_add_builtin(e, "nth", builtin_get_nth);
+    lenv_add_builtin(e, "len", builtin_get_len);
+    lenv_add_builtin(e, "or", builtin_or);
+    lenv_add_builtin(e, "and", builtin_and);
     lenv_put(e, lval_sym("true"), lval_bool(1));
     lenv_put(e, lval_sym("false"), lval_bool(0));
 }
