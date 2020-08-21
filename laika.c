@@ -833,6 +833,30 @@ lval* builtin_load(lenv* e, lval* a) {
     }
 
 }
+lval* builtin_num_tostr(lenv* e, lval* a) {
+    LASSERT_NUM("num-tostr", a, 1);
+    LASSERT_TYPE("num-tostr", a, 0, LVAL_NUM);
+    char* str = malloc(sizeof(char)*20);
+    sprintf(str, "%li", a->cell[0]->num);
+    lval* result = lval_str(str);
+    lval_del(a);
+    free(str);
+    return result;
+}
+lval* builtin_str_tonum(lenv* e, lval* a) {
+    LASSERT_NUM("str-tonum", a, 1);
+    LASSERT_TYPE("str-tonum", a, 0, LVAL_STR);
+    long x = 0;
+    sscanf(a->cell[0]->str, "%li", &x);
+    lval_del(a);
+    return lval_num(x);
+}
+lval* builtin_read(lenv* e, lval* a) {
+    LASSERT_NUM("read", a, 1);
+    LASSERT_TYPE("read", a, 0, LVAL_STR);
+    char* input = readline(a->cell[0]->str);
+    return lval_str(input);
+}
 
 void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
     lval* k = lval_sym(name);
@@ -872,6 +896,9 @@ void lenv_add_builtins(lenv* e) {
     lenv_add_builtin(e, "print", builtin_print);
     lenv_add_builtin(e, "error", builtin_error);
     lenv_add_builtin(e, "load", builtin_load);
+    lenv_add_builtin(e, "num-tostr", builtin_num_tostr);
+    lenv_add_builtin(e, "str-tonum", builtin_str_tonum);
+    lenv_add_builtin(e, "read", builtin_read);
     lenv_put(e, lval_sym("true"), lval_bool(1));
     lenv_put(e, lval_sym("false"), lval_bool(0));
 }
