@@ -55,6 +55,15 @@ struct lenv;
 typedef struct lval lval;
 typedef struct lenv lenv;
 
+mpc_parser_t* Number;
+mpc_parser_t* Symbol;
+mpc_parser_t* String;
+mpc_parser_t* Comment;
+mpc_parser_t* Sexpr;
+mpc_parser_t* Qexpr;
+mpc_parser_t* Expr;
+mpc_parser_t* Laika;
+
 typedef lval*(*lbuiltin)(lenv*, lval*);
 
 /* Declare new lval struct*/
@@ -797,6 +806,33 @@ lval* builtin_error(lenv* e, lval* a) {
     lval_del(a);
     return err; 
 }
+lval* builtin_load(lenv* e, lval* a) {
+    LASSERT_NUM("print", a, 1);
+    LASSERT_TYPE("print", a, 0, LVAL_STR);
+    mpc_result_t r;
+    if (mpc_parse_contents(a->cell[0]->str, Laika, &r)) {
+        lval* expr = lval_read(r.output);
+        mpc_ast_delete(r.output);
+        while(expr->count) {
+            lval* x = lval_eval(e, lval_pop(expr, 0));
+            if (x->type == LVAL_ERR) {
+                lval_println(x);
+            }
+            lval_del(x);
+        }
+        lval_del(expr);
+        lval_del(a);
+        return lval_sexpr();
+    } else {
+        char* err_msg = mpc_err_string(r.error);
+        lval* err = lval_err(err_msg);
+        mpc_err_delete(r.error);
+        free(err_msg);
+        lval_del(a);
+        return err;
+    }
+
+}
 
 void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
     lval* k = lval_sym(name);
@@ -835,6 +871,7 @@ void lenv_add_builtins(lenv* e) {
     lenv_add_builtin(e, "dump", builtin_dump);
     lenv_add_builtin(e, "print", builtin_print);
     lenv_add_builtin(e, "error", builtin_error);
+    lenv_add_builtin(e, "load", builtin_load);
     lenv_put(e, lval_sym("true"), lval_bool(1));
     lenv_put(e, lval_sym("false"), lval_bool(0));
 }
@@ -948,14 +985,14 @@ lval* lval_eval(lenv* e, lval* v) {
 int main(int argc, char** argv) {
 
     /* Create some parsers */
-    mpc_parser_t* Number = mpc_new("number");
-    mpc_parser_t* Symbol = mpc_new("symbol");
-    mpc_parser_t* String = mpc_new("string");
-    mpc_parser_t* Comment = mpc_new("comment");
-    mpc_parser_t* Sexpr= mpc_new("sexpr");
-    mpc_parser_t* Qexpr= mpc_new("qexpr");
-    mpc_parser_t* Expr= mpc_new("expr");
-    mpc_parser_t* Laika = mpc_new("laika");
+    Number = mpc_new("number");
+    Symbol = mpc_new("symbol");
+    String = mpc_new("string");
+    Comment = mpc_new("comment");
+    Sexpr= mpc_new("sexpr");
+    Qexpr= mpc_new("qexpr");
+    Expr= mpc_new("expr");
+    Laika = mpc_new("laika");
 
     /* Define them with the following language */
     mpca_lang(MPCA_LANG_DEFAULT,
@@ -971,39 +1008,50 @@ int main(int argc, char** argv) {
       laika   : /^/ <expr>* /$/ ;                  \
     ",
     Number, Symbol, String, Comment, Sexpr, Qexpr, Expr, Laika);
-
-    /* Print version and exit information */
-    puts("Laika Version 0.0.0.0.1");
-    puts("Press Ctrl+c to exit.\n");
     lenv* e = lenv_new();
     lenv_add_builtins(e);
 
-    /* In a never ending loop */
-    while (1) {
+    if (argc ==1) {
+        /* Print version and exit information */
+        puts("Laika Version 0.0.0.0.1");
+        puts("Press Ctrl+c to exit.\n");
 
-    /* Output our promt */
-    char* input = readline("Laika > ");
+        /* In a never ending loop */
+        while (1) {
 
-    /* Add input to history */
-    add_history(input);
+        /* Output our promt */
+        char* input = readline("Laika > ");
 
-    /* Attempt to parse the user input */
-    mpc_result_t r;
-    if (mpc_parse("<stdin>", input, Laika, &r)) {
-        lval* result = lval_eval(e, lval_read(r.output));
-        lval_println(result);
-        lval_del(result);
-        mpc_ast_delete(r.output);
+        /* Add input to history */
+        add_history(input);
+
+        /* Attempt to parse the user input */
+        mpc_result_t r;
+        if (mpc_parse("<stdin>", input, Laika, &r)) {
+            lval* result = lval_eval(e, lval_read(r.output));
+            lval_println(result);
+            lval_del(result);
+            mpc_ast_delete(r.output);
+        } else {
+            // Otherwise print the error
+            mpc_err_print(r.output);
+            mpc_err_delete(r.output);
+        }
+
+        
+        /* Free retrieved input */ 
+        free(input);
+
+        }
     } else {
-        // Otherwise print the error
-        mpc_err_print(r.output);
-        mpc_err_delete(r.output);
-    }
-
-    
-    /* Free retrieved input */ 
-    free(input);
-
+        for (int i = 1; i < argc; i++) {
+            lval* args = lval_add(lval_sexpr(), lval_str(argv[i]));
+            lval* x = builtin_load(e, args);
+            if (x->type == LVAL_ERR) {
+                lval_println(x);
+            }
+            lval_del(x);
+        }
     }
     lenv_del(e);
     /* Undefine and delete our parsers */
