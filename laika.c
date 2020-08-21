@@ -538,9 +538,9 @@ lval* builtin_list(lenv* e, lval* a) {
 }
 lval* builtin_eval(lenv* e, lval* a) {
     LASSERT(a, a->count == 1,
-        "Function 'head' passed too many arguments!");
+        "Function 'eval' passed too many arguments!");
     LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
-        "Function 'head' passed incorrect type!");
+        "Function 'eval' passed incorrect type!");
     lval* x = lval_take(a, 0);
     x->type = LVAL_SEXPR;
     return lval_eval(e, x);
@@ -555,7 +555,7 @@ lval* lval_join(lval* x, lval* y) {
 lval* builtin_join(lenv* e, lval* a) {
     for (int i = 0; i < a->count; i++) {
         LASSERT(a, a->cell[i]->type == LVAL_QEXPR,
-            "Function 'head' passed incorrect type!");
+            "Function 'eval' passed incorrect type!");
     }
     lval* x = lval_pop(a, 0);
     while (a->count > 0) {
