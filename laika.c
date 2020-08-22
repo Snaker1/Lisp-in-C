@@ -1,7 +1,8 @@
+#include <string.h>
 #include <stdio.h>
-
 #include <stdlib.h>
-#include "mpc.h"
+#include <stdarg.h>
+#include <errno.h>
 
 /* If we are compiling on Windows compile these functions */
 #ifdef _WIN32
@@ -32,7 +33,7 @@ void add_history(char* unused) {}
       lval* err = lval_err(fmt, ##__VA_ARGS__); \
       lval_del(args); \
       return err; \
-  } 
+  }
 
 #define LASSERT_TYPE(func, args, index, expect) \
   LASSERT(args, args->cell[index]->type == expect, \
@@ -50,19 +51,52 @@ void add_history(char* unused) {}
   LASSERT(args, args->cell[index]->count != 0, \
     "Function '%s' passed {} for argument %i.", func, index);
 
+/* Function to unescape characters */
+char lval_str_unescape(char x) {
+    switch (x) {
+        case 'a':  return '\a';
+        case 'b':  return '\b';
+        case 'f':  return '\f';
+        case 'n':  return '\n';
+        case 'r':  return '\r';
+        case 't':  return '\t';
+        case 'v':  return '\v';
+        case '\\': return '\\';
+        case '\'': return '\'';
+        case '\"': return '\"';
+    }
+    return '\0';
+}
+
+/* Possible unescapable characters */
+char* lval_str_unescapable = "abfnrtv\\\'\"";
+
+/* List of possible escapable characters */
+char* lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
+
+/* Function to escape characters */
+char* lval_str_escape(char x) {
+  switch (x) {
+    case '\a': return "\\a";
+    case '\b': return "\\b";
+    case '\f': return "\\f";
+    case '\n': return "\\n";
+    case '\r': return "\\r";
+    case '\t': return "\\t";
+    case '\v': return "\\v";
+    case '\\': return "\\\\";
+    case '\'': return "\\\'";
+    case '\"': return "\\\"";
+  }
+  return "";
+}
+
+
+
 struct lval;
 struct lenv;
 typedef struct lval lval;
 typedef struct lenv lenv;
-
-mpc_parser_t* Number;
-mpc_parser_t* Symbol;
-mpc_parser_t* String;
-mpc_parser_t* Comment;
-mpc_parser_t* Sexpr;
-mpc_parser_t* Qexpr;
-mpc_parser_t* Expr;
-mpc_parser_t* Laika;
 
 typedef lval*(*lbuiltin)(lenv*, lval*);
 
@@ -106,6 +140,8 @@ lval* lval_builtin_op(lenv* e, lval* a, char* op);
 lval* lval_pop(lval* v, int i);
 lval* lval_take(lval* v, int i);
 int lval_eq(lval* x, lval* y);
+lval* lval_read(char* s, int* i);
+lval* lval_read_expr(char* s, int* i, char end);
 
 
 void lenv_del(lenv* e) {
@@ -135,11 +171,11 @@ lenv* lenv_copy(lenv* e) {
     n->par = e->par;
     n->count = e->count;
     n->syms = malloc(sizeof(char*) * n->count);
-    n->vals = malloc(sizeof(lval) * n->count); 
+    n->vals = malloc(sizeof(lval) * n->count);
     for (int i = 0; i < e->count; i++) {
         n->syms[i] = malloc(strlen(e->syms[i]) + 1);
         strcpy(n->syms[i], e->syms[i]);
-        n->vals[i] = lval_copy(e->vals[i]); 
+        n->vals[i] = lval_copy(e->vals[i]);
     }
     return n;
 }
@@ -157,7 +193,7 @@ void lenv_put(lenv* e, lval* k, lval* v) {
     e->vals = realloc(e->vals, sizeof(lval*) * e->count);
     e->syms = realloc(e->syms, sizeof(char*) * e->count);
     e->vals[e->count-1] = lval_copy(v);
-    e->syms[e->count-1] = malloc(strlen(k->sym)+1); 
+    e->syms[e->count-1] = malloc(strlen(k->sym)+1);
     strcpy(e->syms[e->count-1], k->sym);
 }
 void lenv_def(lenv* e, lval* k, lval* v) {
@@ -349,15 +385,18 @@ void lval_expr_print(lval* v, char open, char close) {
     putchar(close);
 }
 void lval_print_str(lval* v) {
-    /* Make a Copy of the string */
-    char* escaped = malloc(strlen(v->str)+1);
-    strcpy(escaped, v->str);
-    /* Pass it through the escape function */
-    escaped = mpcf_escape(escaped);
-    /* Print it between " characters */
-    printf("\"%s\"", escaped);
-    /* free the copied string */
-    free(escaped);
+    putchar('"');
+    /* Loop over the characters in the string */
+    for (int i = 0; i < strlen(v->str); i++) {
+        if (strchr(lval_str_escapable, v->str[i])) {
+        /* If the character is escapable then escape it */
+        printf("%s", lval_str_escape(v->str[i]));
+        } else {
+        /* Otherwise print character as it is */
+        putchar(v->str[i]);
+        }
+    }
+    putchar('"');
 }
 /* Print an lval */
 void lval_print(lval* v) {
@@ -383,52 +422,12 @@ void lval_print(lval* v) {
             } break;
     };
 }
-lval* lval_read_num(mpc_ast_t* t) {
-    errno = 0;
-    long x = strtol(t->contents, NULL, 10);
-    return errno != ERANGE ?
-    lval_num(x) : lval_err("Invalid number");
-}
-lval* lval_read_str(mpc_ast_t* t) {
-    t->contents[strlen(t->contents) - 1] = '\0';
-    char* unescaped = malloc(strlen(t->contents+1)+1);
-    strcpy(unescaped, t->contents+1);
-    lval* str = lval_str(unescaped);
-    free(unescaped);
-    return str;
-
-}
 lval* lval_add(lval* v, lval* x) {
     v->count++;
     v->cell = realloc(v->cell, sizeof(lval*) * v->count);
     v->cell[v->count-1] = x;
     return v;
 }
-lval* lval_read(mpc_ast_t* t) {
-    /* If Symbol or Number return conversion to that type */
-    if (strstr(t->tag, "number")) { return lval_read_num(t); }
-    if (strstr(t->tag, "string")) { return lval_read_str(t); }
-    if (strstr(t->tag, "symbol")) { return lval_sym(t->contents); }
-
-    /* If root (>) or sexpr then create empty list */
-    lval* x = NULL;
-    if (strcmp(t->tag, ">") == 0) { x = lval_sexpr(); }
-    if (strstr(t->tag, "sexpr"))  { x = lval_sexpr(); }
-    if (strstr(t->tag, "qexpr"))  { x = lval_qexpr(); }
-
-    /* Fill this list with any valid expression contained within */
-    for (int i = 0; i < t->children_num; i++) {
-        if (strcmp(t->children[i]->contents, "(") == 0) { continue; }
-        if (strcmp(t->children[i]->contents, ")") == 0) { continue; }
-        if (strcmp(t->children[i]->contents, "{") == 0) { continue; }
-        if (strcmp(t->children[i]->contents, "}") == 0) { continue; }
-        if (strcmp(t->children[i]->tag,  "regex") == 0) { continue; }
-        if (strstr(t->children[i]->tag, "comment")) { continue; }
-        x = lval_add(x, lval_read(t->children[i]));
-    }
-    return x;
-}
-
 
 // Print lval followed by newline
 void lval_println(lval* v) {
@@ -506,28 +505,17 @@ lval* builtin_mod(lenv* e, lval* a) {
     return lval_builtin_op(e, a, "%");
 }
 lval* builtin_head(lenv* e, lval* a) {
-  LASSERT(a, a->count == 1,
-    "Function 'head' passed too many arguments!\n"
-    "Got %i, expected 1",
-    a->count);
-  LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
-    "Function 'head' passed incorrect type!\n"
-    "Got %s, expected %s",
-    ltype_name(a->cell[0]->type), ltype_name(LVAL_QEXPR));
-  LASSERT(a, a->cell[0]->count != 0,
-    "Function 'head' passed {}!");
-
-  lval* v = lval_take(a, 0);
-  while (v->count > 1) { lval_del(lval_pop(v, 1)); }
-  return v;
+    LASSERT_NUM("head", a, 1);
+    LASSERT_TYPE("head", a, 0, LVAL_QEXPR);
+    LASSERT_NOT_EMPTY("head", a, 0);
+    lval* v = lval_take(a, 0);
+    while (v->count > 1) { lval_del(lval_pop(v, 1)); }
+    return v;
 }
 lval* builtin_tail(lenv* e, lval* a) {
-    LASSERT(a, a->count == 1,
-        "Function 'head' passed too many arguments!");
-    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
-        "Function 'head' passed incorrect type!");
-    LASSERT(a, a->cell[0]->count != 0,
-        "Function 'head' passed {}!");
+    LASSERT_NUM("tail", a, 1);
+    LASSERT_TYPE("tail", a, 0, LVAL_QEXPR);
+    LASSERT_NOT_EMPTY("tail", a, 0);
     lval* v = lval_take(a, 0);
     lval_del(lval_pop(v,0));
     return v;
@@ -537,10 +525,8 @@ lval* builtin_list(lenv* e, lval* a) {
     return a;
 }
 lval* builtin_eval(lenv* e, lval* a) {
-    LASSERT(a, a->count == 1,
-        "Function 'eval' passed too many arguments!");
-    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
-        "Function 'eval' passed incorrect type!");
+    LASSERT_NUM("eval", a, 1);
+    LASSERT_TYPE("eval", a, 0, LVAL_QEXPR);
     lval* x = lval_take(a, 0);
     x->type = LVAL_SEXPR;
     return lval_eval(e, x);
@@ -554,8 +540,7 @@ lval* lval_join(lval* x, lval* y) {
 }
 lval* builtin_join(lenv* e, lval* a) {
     for (int i = 0; i < a->count; i++) {
-        LASSERT(a, a->cell[i]->type == LVAL_QEXPR,
-            "Function 'eval' passed incorrect type!");
+        LASSERT_TYPE("join", a, i, LVAL_QEXPR);
     }
     lval* x = lval_pop(a, 0);
     while (a->count > 0) {
@@ -804,15 +789,27 @@ lval* builtin_error(lenv* e, lval* a) {
     char* err_str = a->cell[0]->str;
     lval* err = lval_err(err_str);
     lval_del(a);
-    return err; 
+    return err;
 }
 lval* builtin_load(lenv* e, lval* a) {
     LASSERT_NUM("print", a, 1);
     LASSERT_TYPE("print", a, 0, LVAL_STR);
-    mpc_result_t r;
-    if (mpc_parse_contents(a->cell[0]->str, Laika, &r)) {
-        lval* expr = lval_read(r.output);
-        mpc_ast_delete(r.output);
+    FILE* f = fopen(a->cell[0]->str, "rb");
+    if (f == NULL) {
+        lval* err = lval_err("Could not load library %s", a->cell[0]->str);
+        lval_del(a);
+        return err;
+    }
+    fseek(f, 0, SEEK_END);
+    long length = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char* input = calloc(length+1, 1);
+    fread(input, 1, length, f);
+    fclose(f);
+    int pos = 0;
+    lval* expr = lval_read_expr(input, &pos, '\0');
+    free(input);
+    if (expr->type != LVAL_ERR) {
         while(expr->count) {
             lval* x = lval_eval(e, lval_pop(expr, 0));
             if (x->type == LVAL_ERR) {
@@ -820,19 +817,14 @@ lval* builtin_load(lenv* e, lval* a) {
             }
             lval_del(x);
         }
-        lval_del(expr);
-        lval_del(a);
-        return lval_sexpr();
     } else {
-        char* err_msg = mpc_err_string(r.error);
-        lval* err = lval_err(err_msg);
-        mpc_err_delete(r.error);
-        free(err_msg);
-        lval_del(a);
-        return err;
+        lval_println(expr);
     }
-
+    lval_del(expr);
+    lval_del(a);
+    return lval_sexpr();
 }
+
 lval* builtin_num_tostr(lenv* e, lval* a) {
     LASSERT_NUM("num-tostr", a, 1);
     LASSERT_TYPE("num-tostr", a, 0, LVAL_NUM);
@@ -951,7 +943,7 @@ lval* lval_call(lenv* e, lval* f, lval* a) {
         lval_del(sym);
         lval_del(val);
     }
-    
+
     if (f->formals->count == 0) {
         f->env->par = e;
         return builtin_eval(f->env, lval_add(lval_sexpr(), lval_copy(f->body)));
@@ -1009,32 +1001,161 @@ lval* lval_eval(lenv* e, lval* v) {
     return v;
 }
 
+/* Reading */
+
+lval* lval_read_sym(char* s, int* i) {
+    /* Allocate Empty String */
+    char* part = calloc(1,1);
+    /* While valid identifier characters */
+    while (strchr(
+      "abcdefghijklmnopqrstuvwxyz"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "0123456789_+-*\\/=<>!&", s[*i]) && s[*i] != '\0') {
+
+        /* Append character to end of string */
+        part = realloc(part, strlen(part)+2);
+        part[strlen(part)+1] = '\0';
+        part[strlen(part)+0] = s[*i];
+        (*i)++;
+    }
+    /* Check if Identifier looks like number */
+    int is_num = strchr("-0123456789", part[0]) != NULL;
+    for (int j = 1; j < strlen(part); j++) {
+        if (strchr("0123456789", part[j]) == NULL) { is_num = 0; break; }
+    }
+    if (strlen(part) == 1 && part[0] == '-') { is_num = 0; }
+
+    /* Add Symbol or Number as lval */
+    lval* x = NULL;
+    if (is_num) {
+        errno = 0;
+        long v = strtol(part, NULL, 10);
+        x = (errno != ERANGE) ? lval_num(v) : lval_err("Invalid Number %s", part);
+    } else {
+        x = lval_sym(part);
+    }
+    /* Free temp string */
+    free(part);
+    /* Return lval */
+    return x;
+}
+
+
+lval* lval_read_str(char* s, int* i) {
+    /* Allocate empty string */
+    char* part = calloc(1,1);
+    /* More forward one step past initial " character */
+    (*i)++;
+    while (s[*i] != '"') {
+        char c = s[*i];
+        /* If end of input then there is an unterminated string literal */
+        if (c == '\0') {
+            free(part);
+            return lval_err("Unexpected end of input");
+        }
+        /* If backslash then unescape character after it */
+        if (c == '\\') {
+        (*i)++;
+        /* Check next character is escapable */
+        if (strchr(lval_str_unescapable, s[*i])) {
+            c = lval_str_unescape(s[*i]);
+        } else {
+            free(part);
+            return lval_err("Invalid escape sequence \\%c", s[*i]);
+        }
+        }
+        /* Append character to string */
+        part = realloc(part, strlen(part)+2);
+        part[strlen(part)+1] = '\0';
+        part[strlen(part)+0] = c;
+        (*i)++;
+    }
+    /* Move forward past final " character */
+    (*i)++;
+    lval* x = lval_str(part);
+    /* free temp string */
+    free(part);
+    return x;
+}
+
+
+lval* lval_read_expr(char* s, int* i, char end) {
+
+    /* Either create new qexpr or sexpr */
+    lval* x = (end == '}') ? lval_qexpr() : lval_sexpr();
+
+    /* While not at end character keep reading lvals */
+    while (s[*i] != end) {
+        lval* y = lval_read(s, i);
+        /* If an error then return this and stop */
+        if (y->type == LVAL_ERR) {
+            lval_del(x);
+            return y;
+        } else {
+            lval_add(x, y);
+        }
+    }
+    /* Move past end character */
+    (*i)++;
+
+    return x;
+
+}
+
+lval* lval_read(char* s, int* i) {
+    /* Skip all trailing whitespace and comments */
+    while (strchr(" \t\v\r\n;", s[*i]) && s[*i] != '\0') {
+        if (s[*i] == ';') {
+            while (s[*i] != '\n' && s[*i] != '\0') { (*i)++; }
+        }
+        (*i)++;
+    }
+
+    lval* x = NULL;
+
+    /* If we reach end of input then we're missing something */
+    if (s[*i] == '\0') {
+        return lval_err("Unexpected end of input");
+    }
+
+    /* If next character is ( then read S-Expr */
+    else if (s[*i] == '(') {
+        (*i)++;
+        x = lval_read_expr(s, i, ')');
+    }
+    /* If next character is { then read Q-Expr */
+    else if (s[*i] == '{') {
+        (*i)++;
+        x = lval_read_expr(s, i, '}');
+    }
+    /* If next character is part of a symbol then read symbol */
+    else if (strchr(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789_+-*\\/=<>!&", s[*i])) {
+        x = lval_read_sym(s, i);
+    }
+    /* If next character is " then read string */
+    else if (strchr("\"", s[*i])) {
+        x = lval_read_str(s, i);
+    }
+
+    /* Encountered some unexpected character */
+    else {
+        x = lval_err("Unexpected character %c", s[*i]);
+    }
+
+    /* Skip all trailing whitespace and comments */
+    while (strchr(" \t\v\r\n;", s[*i]) && s[*i] != '\0') {
+        if (s[*i] == ';') {
+            while (s[*i] != '\n' && s[*i] != '\0') { (*i)++; }
+        }
+        (*i)++;
+    }
+    return x;
+}
+
 int main(int argc, char** argv) {
-
-    /* Create some parsers */
-    Number = mpc_new("number");
-    Symbol = mpc_new("symbol");
-    String = mpc_new("string");
-    Comment = mpc_new("comment");
-    Sexpr= mpc_new("sexpr");
-    Qexpr= mpc_new("qexpr");
-    Expr= mpc_new("expr");
-    Laika = mpc_new("laika");
-
-    /* Define them with the following language */
-    mpca_lang(MPCA_LANG_DEFAULT,
-    "                                              \
-      number  : /-?[0-9]+/ ;                       \
-      symbol  : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/ ; \
-      string  : /\"(\\\\.|[^\"])*\"/ ;             \
-      comment : /;[^\\r\\n]*/ ;                    \
-      sexpr   : '(' <expr>* ')' ;                  \
-      qexpr   : '{' <expr>* '}' ;                  \
-      expr    : <number>  | <symbol> | <string>    \
-              | <comment> | <sexpr>  | <qexpr>;    \
-      laika   : /^/ <expr>* /$/ ;                  \
-    ",
-    Number, Symbol, String, Comment, Sexpr, Qexpr, Expr, Laika);
     lenv* e = lenv_new();
     lenv_add_builtins(e);
 
@@ -1045,30 +1166,19 @@ int main(int argc, char** argv) {
 
         /* In a never ending loop */
         while (1) {
+            /* Output our promt */
+            char* input = readline("Laika > ");
 
-        /* Output our promt */
-        char* input = readline("Laika > ");
+            /* Add input to history */
+            add_history(input);
 
-        /* Add input to history */
-        add_history(input);
+            int pos = 0;
+            lval* expr = lval_read_expr(input, &pos, '\0');
+            lval* x = lval_eval(e, expr);
+            lval_println(x);
+            lval_del(x);
 
-        /* Attempt to parse the user input */
-        mpc_result_t r;
-        if (mpc_parse("<stdin>", input, Laika, &r)) {
-            lval* result = lval_eval(e, lval_read(r.output));
-            lval_println(result);
-            lval_del(result);
-            mpc_ast_delete(r.output);
-        } else {
-            // Otherwise print the error
-            mpc_err_print(r.output);
-            mpc_err_delete(r.output);
-        }
-
-        
-        /* Free retrieved input */ 
-        free(input);
-
+            free(input);
         }
     } else {
         for (int i = 1; i < argc; i++) {
@@ -1081,8 +1191,6 @@ int main(int argc, char** argv) {
         }
     }
     lenv_del(e);
-    /* Undefine and delete our parsers */
-    mpc_cleanup(6, Number, Symbol, String, Comment, Sexpr, Qexpr, Expr, Laika);
 
     return 0;
 }
