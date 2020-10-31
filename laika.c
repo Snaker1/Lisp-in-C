@@ -754,9 +754,9 @@ lval* builtin_or(lenv* e, lval* a) {
     return lval_bool(r);
 }
 lval* builtin_and(lenv* e, lval* a) {
-    LASSERT_NUM("or", a, 2);
-    LASSERT_TYPE("or", a, 0, LVAL_BOOL);
-    LASSERT_TYPE("or", a, 1, LVAL_BOOL);
+    LASSERT_NUM("and", a, 2);
+    LASSERT_TYPE("and", a, 0, LVAL_BOOL);
+    LASSERT_TYPE("and", a, 1, LVAL_BOOL);
     long x1 = a->cell[0]->num;
     long x2 = a->cell[1]->num;
     int r = x1 && x2;
